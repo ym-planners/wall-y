@@ -1,0 +1,8 @@
+requests
+Pillow
+PyQt5
+beautifulsoup4
+pywin32
+cx_Freeze
+chardet
+urllib3
