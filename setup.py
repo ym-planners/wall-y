@@ -19,18 +19,18 @@ if sys.platform == "win32":
     base = "Win32GUI"
 
 setup(
-    name="APOD Wallpaper",
+    name="WALL-Y",
     version="0.1",
-    description="NASA APOD Wallpaper Changer",
+    description="Wall-y -NASA APOD Wallpaper Changer",
     options={"build_exe": build_exe_options},
     executables=[
         Executable(
             "apod_wallpaper.py", 
             base=base,
             icon="image-face.ico",  # Using .ico file instead of .png
-            shortcut_name="APOD Wallpaper",
+            shortcut_name="wall-y",
             shortcut_dir="DesktopFolder",
-            target_name="APOD_Wallpaper.exe"
+            target_name="wall_y.exe"
         )
     ]
 )
