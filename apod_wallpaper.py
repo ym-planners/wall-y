@@ -25,7 +25,24 @@ def is_already_running():
     except socket.error:
         return True
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for cx_Freeze """
+    if getattr(sys, 'frozen', False):
+        # If the application is run as a bundle (e.g., by cx_Freeze),
+        # sys.executable is the path to the .exe.
+        # Resources included by cx_Freeze are typically in the same directory.
+        base_path = os.path.dirname(sys.executable)
+        print(f"Frozen mode: sys.executable dir: {base_path}")
+    else:
+        # If run in a normal Python environment
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        print(f"Development mode: __file__ dir: {base_path}")
+    resolved_path = os.path.join(base_path, relative_path)
+    print(f"Resolved resource path for '{relative_path}': {resolved_path}")
+    return resolved_path # Return the fully resolved path
+
 class APODWallpaper:
+    # [Rest of the APODWallpaper class remains unchanged]
     def __init__(self):
         self.base_url = "https://apod.nasa.gov/apod/"
         self.archive_url = "https://apod.nasa.gov/apod/archivepixFull.html"
@@ -381,13 +398,22 @@ class SettingsDialog(QDialog):
         """Add the application to Windows startup"""
         import winreg as reg
         try:
-            file_path = os.path.abspath(sys.argv[0])
+            # Get the executable path
+            if getattr(sys, 'frozen', False):
+                # If running as exe (PyInstaller or cx_Freeze)
+                file_path = sys.executable
+            else:
+                # If running as script
+                file_path = os.path.abspath(sys.argv[0])
+                
+            print(f"Adding to startup: {file_path}")
             key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_SET_VALUE)
             reg.SetValueEx(key, "APODWallpaper", 0, reg.REG_SZ, file_path)
             reg.CloseKey(key)
             return True
         except Exception as e:
             print(f"Error adding to startup: {e}")
+            traceback.print_exc()
             return False
     
     def remove_from_startup(self):
@@ -412,40 +438,52 @@ class SystemTrayApp(QtWidgets.QApplication):
         self.wallpaper = APODWallpaper()
         
         # Create system tray icon
-        self.tray = QSystemTrayIcon()
+        self.tray = QSystemTrayIcon(self) # Pass parent
         
-        # Set icon - use the specified icon file if it exists
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image-face.ico")
+        # --- Robust Icon Loading ---
+        icon_path = resource_path("wall-y-round.ico")
         if os.path.exists(icon_path):
-            # Create a proper icon from the file
-            icon = QtGui.QIcon()
-            icon.addFile(icon_path, QtCore.QSize(16, 16))
-            icon.addFile(icon_path, QtCore.QSize(24, 24))
-            icon.addFile(icon_path, QtCore.QSize(32, 32))
-            icon.addFile(icon_path, QtCore.QSize(48, 48))
-            self.tray.setIcon(icon)
-            # Also set as window icon
-            self.setWindowIcon(icon)
+            print(f"Attempting to load icon from: {icon_path}")
+            app_icon = QtGui.QIcon(icon_path) # Simpler way to load if path is correct
+            
+            if app_icon.isNull():
+                print(f"Warning: Icon at {icon_path} loaded but isNull() returned True. File might be invalid or unreadable by Qt. Using fallback.")
+                self._set_fallback_icon()
+            else:
+                self.tray.setIcon(app_icon)
+                self.setWindowIcon(app_icon) 
         else:
-            # Fallback to a simple icon
-            self.tray.setIcon(QtGui.QIcon(QtGui.QPixmap(16, 16)))
-        
+            print(f"Icon file not found at {icon_path}, using fallback icon.")
+            self._set_fallback_icon()
+        # --- End Icon Loading ---
+
         self.tray.setVisible(True)
         
-        # Create menu with fixed width
+        # Create menu with better size (1/6th of screen width)
         self.menu = QMenu()
-        self.menu.setFixedWidth(300)  # Set a fixed width for the menu
+        screen_size = QtWidgets.QDesktopWidget().screenGeometry()
+        menu_width = screen_size.width() // 6  # 1/6th of screen width
+        self.menu.setFixedWidth(menu_width)
         
         # Add actions
         self.update_action = QAction("Update Wallpaper Now")
         self.update_action.triggered.connect(self.manual_update)
         self.menu.addAction(self.update_action)
         
-        # Add description preview with "View Full Description" option
-        self.description_preview = QAction("Loading description...")
-        self.description_preview.setEnabled(False)
-        self.menu.addAction(self.description_preview)
+        # --- QWidgetAction for Description Preview ---
+        self.description_preview_label = QLabel("Loading description...")
+        self.description_preview_label.setWordWrap(True)
+        # Let the label expand horizontally to fill the menu's width.
+        # Preferred height will be based on wrapped text.
+        self.description_preview_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self.description_preview_label.setMinimumWidth(int(menu_width * 0.9)) # Use about 90% of menu width
+        self.description_preview_label.setStyleSheet("QLabel { padding: 2px; }") # Add some padding
         
+        self.description_preview_action = QtWidgets.QWidgetAction(self.menu)
+        self.description_preview_action.setDefaultWidget(self.description_preview_label)
+        self.menu.addAction(self.description_preview_action)
+        # --- End QWidgetAction ---
+
         self.view_full_description = QAction("View Full Description")
         self.view_full_description.triggered.connect(self.show_full_description)
         self.menu.addAction(self.view_full_description)
@@ -476,6 +514,16 @@ class SystemTrayApp(QtWidgets.QApplication):
         
         # Initial check - always check for new image on startup
         QtCore.QTimer.singleShot(1000, self.initial_check)
+
+    def _set_fallback_icon(self):
+        """Sets a simple, programmatically generated fallback icon."""
+        pixmap = QtGui.QPixmap(32, 32)
+        pixmap.fill(QtGui.QColor("blue")) # A distinct blue color
+        fallback_icon = QtGui.QIcon(pixmap)
+        self.tray.setIcon(fallback_icon)
+        self.setWindowIcon(fallback_icon)
+        print("Fallback icon (blue square) has been set.")
+
     
     def initial_check(self):
         """Check if we need to update on startup - always check for new image"""
@@ -539,17 +587,16 @@ class SystemTrayApp(QtWidgets.QApplication):
     def update_description_preview(self):
         """Update the description preview in the menu"""
         if self.wallpaper.current_description:
-            # Get a preview of the description (first 30 words)
-            preview = self.get_preview_text(self.wallpaper.current_description)
-            
-            # Set the description in the menu
-            self.description_preview.setText(preview)
-            self.description_preview.setEnabled(False)  # Disable to prevent clicking
+            # Get a shorter preview for the menu (e.g., 30-40 words)
+            preview_text = self.get_preview_text(self.wallpaper.current_description, max_words=35)
+            self.description_preview_label.setText(preview_text)
+            # QWidgetAction is not typically enabled/disabled in the same way as QAction
+            # Its interactivity comes from its widget. The label is not interactive.
             self.view_full_description.setEnabled(True)
         else:
-            self.description_preview.setText("No description available")
-            self.description_preview.setEnabled(False)
+            self.description_preview_label.setText("No description available")
             self.view_full_description.setEnabled(False)
+
     
     def show_full_description(self):
         """Show the full description in a dialog"""
@@ -577,17 +624,13 @@ class SystemTrayApp(QtWidgets.QApplication):
     
     def is_update_time(self):
         """Check if it's time to update based on midnight ET (6:00 AM CEST)"""
-        now = datetime.datetime.now()
-        
-        # Convert current time to ET (UTC-4 during daylight saving, UTC-5 standard)
-        # This is a simplified approach - for production, use pytz for proper timezone handling
-        utc_offset = -4  # Assuming EDT (daylight saving time)
-        
-        # Get current hour in ET
-        et_hour = (now.hour + utc_offset) % 24
-        
-        # Check if we're past midnight ET and haven't updated today
-        return et_hour >= 0 and et_hour < 1  # Between midnight and 1 AM ET
+        # APOD updates daily, typically around midnight US Eastern Time.
+        # Midnight ET is ~04:00-05:00 UTC depending on DST.
+        # This check is a general window. is_new_image_available() is more definitive.
+        now_utc = datetime.datetime.utcnow()
+        # Check if current UTC hour is in a window that's likely post-midnight ET.
+        # e.g., 4, 5, 6 UTC (covers midnight to 2 AM ET approx)
+        return now_utc.hour in [4, 5, 6]
     
     def check_scheduled_update(self):
         """Check if it's time for scheduled update"""
