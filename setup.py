@@ -2,12 +2,19 @@ import sys
 import os
 from cx_Freeze import setup, Executable
 
+# Define the source directory relative to setup.py
+SRC_DIR = "src"
+ASSETS_DIR = "assets"
+MAIN_SCRIPT = os.path.join(SRC_DIR, "apod_wallpaper.py")
+ICON_FILE = os.path.join(ASSETS_DIR, "wall-y-round.ico")
+
 # Dependencies are automatically detected, but it might need fine tuning.
 build_exe_options = {
     "packages": ["os", "sys", "ctypes", "requests", "bs4", "PyQt5", "PIL", "urllib3", "chardet", "datetime", "traceback"],
-    "excludes": ["PyQt5.QtQml", "PyQt5.QtQuick", "pytest", "html5lib", "lxml"],
-    "include_files": ["wall-y-round.ico"], # Ensure this is the correct icon file
+    "excludes": ["PyQt5.QtQml", "PyQt5.QtQuick", "pytest", "html5lib", "lxml", "tkinter"], # Added tkinter to excludes
+    "include_files": [ICON_FILE],
     "include_msvcr": True,
+    "build_exe": "build/dist", # Output to build/dist/
     "zip_include_packages": ["*"],
     "zip_exclude_packages": [],
     "optimize": 2
@@ -25,9 +32,9 @@ setup(
     options={"build_exe": build_exe_options},
     executables=[
         Executable(
-            "apod_wallpaper.py", 
+            MAIN_SCRIPT,
             base=base,
-            icon="wall-y-round.ico",  # Standardized icon
+            icon=ICON_FILE,
             shortcut_name="wall-y",
             shortcut_dir="DesktopFolder",
             target_name="wall_y.exe"

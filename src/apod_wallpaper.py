@@ -29,15 +29,21 @@ def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for cx_Freeze """
     if getattr(sys, 'frozen', False):
         # If the application is run as a bundle (e.g., by cx_Freeze),
-        # sys.executable is the path to the .exe.
-        # Resources included by cx_Freeze are typically in the same directory.
+        # base_path is the directory of the executable.
         base_path = os.path.dirname(sys.executable)
         print(f"Frozen mode: sys.executable dir: {base_path}")
+        # In frozen mode, cx_Freeze copies files from 'include_files' to the root of the build_exe directory.
+        # So, the icon will be alongside the executable, not in an 'assets' subfolder within the build.
     else:
         # If run in a normal Python environment
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        print(f"Development mode: __file__ dir: {base_path}")
-    resolved_path = os.path.join(base_path, relative_path)
+        # Go up one level from src to the project root, then to assets
+        # __file__ is src/apod_wallpaper.py
+        # os.path.dirname(__file__) is src/
+        # os.path.dirname(os.path.dirname(__file__)) is project_root/
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_path = os.path.join(project_root, "assets") # Assuming icon is in project_root/assets
+        print(f"Development mode: assets dir: {base_path}")
+    resolved_path = os.path.join(base_path, relative_path.lstrip("assets/"))
     print(f"Resolved resource path for '{relative_path}': {resolved_path}")
     return resolved_path # Return the fully resolved path
 
@@ -337,21 +343,43 @@ class DescriptionDialog(QDialog):
     def __init__(self, title, description, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title or "Image Description")
-        self.resize(600, 400)
-        
+        self.resize(700, 500)
+
         layout = QVBoxLayout()
-        
-        # Description text browser
+
+        # Title label (bold, larger font)
+        title_label = QLabel(title or "")
+        title_label.setWordWrap(True)
+        title_label.setAlignment(QtCore.Qt.AlignCenter)
+        title_label.setStyleSheet("font-size: 18pt; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+
+        # Description text browser (scrollable, monospaced font for APOD style)
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
-        self.text_browser.setHtml(f"<h2>{title}</h2><p>{description}</p>")
-        layout.addWidget(self.text_browser)
-        
-        # Close button
+        self.text_browser.setStyleSheet(
+            "QTextBrowser { font-family: 'Segoe UI', 'Consolas', 'monospace'; font-size: 12pt; background: #fafafa; border: 1px solid #ccc; padding: 10px; }"
+        )
+        # Format description with line breaks for readability
+        formatted_desc = description.replace('\n', '<br>')
+        self.text_browser.setHtml(f"<div style='white-space:pre-wrap;'>{formatted_desc}</div>")
+        layout.addWidget(self.text_browser, stretch=1)
+
+        # Copyright label (bottom, smaller font)
+        copyright_label = QLabel("Copyright © Tragooolchitr Jittasaiyapan")
+        copyright_label.setAlignment(QtCore.Qt.AlignRight)
+        copyright_label.setStyleSheet("font-size: 9pt; color: #888; margin-top: 8px;")
+        layout.addWidget(copyright_label)
+
+        # Button row (horizontal)
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch(1)
         close_button = QPushButton("Close")
+        close_button.setFixedWidth(100)
         close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button)
-        
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
         self.setLayout(layout)
 
 
@@ -441,7 +469,7 @@ class SystemTrayApp(QtWidgets.QApplication):
         self.tray = QSystemTrayIcon(self) # Pass parent
         
         # --- Robust Icon Loading ---
-        icon_path = resource_path("wall-y-round.ico")
+        icon_path = resource_path("assets/wall-y-round.ico")
         if os.path.exists(icon_path):
             print(f"Attempting to load icon from: {icon_path}")
             app_icon = QtGui.QIcon(icon_path) # Simpler way to load if path is correct
@@ -466,6 +494,13 @@ class SystemTrayApp(QtWidgets.QApplication):
         self.menu.setFixedWidth(menu_width)
         
         # Add actions
+        self.open_folder_action = QAction("Open Wallpapers Folder")
+        self.open_folder_action.triggered.connect(self.open_wallpapers_folder)
+        self.settings_action = QAction("Settings")
+        self.settings_action.triggered.connect(self.show_settings)
+        self.exit_action = QAction("Exit")
+        self.exit_action.triggered.connect(self.quit)
+        
         self.update_action = QAction("Update Wallpaper Now")
         self.update_action.triggered.connect(self.manual_update)
         self.menu.addAction(self.update_action)
@@ -473,33 +508,29 @@ class SystemTrayApp(QtWidgets.QApplication):
         # --- QWidgetAction for Description Preview ---
         self.description_preview_label = QLabel("Loading description...")
         self.description_preview_label.setWordWrap(True)
-        # Let the label expand horizontally to fill the menu's width.
-        # Preferred height will be based on wrapped text.
-        self.description_preview_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
-        self.description_preview_label.setMinimumWidth(int(menu_width * 0.9)) # Use about 90% of menu width
-        self.description_preview_label.setStyleSheet("QLabel { padding: 2px; }") # Add some padding
-        
+        # Let the label expand horizontally and vertically to fit more text
+        self.description_preview_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.description_preview_label.setMinimumWidth(int(menu_width * 0.95)) # Use about 95% of menu width
+        self.description_preview_label.setMaximumWidth(int(menu_width * 0.98))
+        self.description_preview_label.setMinimumHeight(300)  # Double the height for better readability
+        self.description_preview_label.setMaximumHeight(350)  # Limit maximum height
+        self.description_preview_label.setStyleSheet("QLabel { padding: 12px; font-size: 10pt; color: #333333; background-color: #ffffff; border: 1px solid #cccccc; border-radius: 8px; font-family: 'Segoe UI'; }") # Reduced font size and consistent font
+        self.description_preview_label.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction | QtCore.Qt.TextSelectableByMouse)
+        self.description_preview_label.mousePressEvent = lambda event: self.show_full_description()
+
         self.description_preview_action = QtWidgets.QWidgetAction(self.menu)
         self.description_preview_action.setDefaultWidget(self.description_preview_label)
         self.menu.addAction(self.description_preview_action)
-        # --- End QWidgetAction ---
 
-        self.view_full_description = QAction("View Full Description")
-        self.view_full_description.triggered.connect(self.show_full_description)
-        self.menu.addAction(self.view_full_description)
-        
-        self.open_folder_action = QAction("Open Wallpapers Folder")
-        self.open_folder_action.triggered.connect(self.open_wallpapers_folder)
-        self.menu.addAction(self.open_folder_action)
-        
-        self.settings_action = QAction("Settings")
-        self.settings_action.triggered.connect(self.show_settings)
-        self.menu.addAction(self.settings_action)
-        
+        # Add a link to the APOD site
+        self.apod_link_action = QAction("Visit APOD Website")
+        self.apod_link_action.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(self.wallpaper.base_url)))
+        self.menu.addAction(self.apod_link_action)
+
+        # Move buttons to the last rows
         self.menu.addSeparator()
-        
-        self.exit_action = QAction("Exit")
-        self.exit_action.triggered.connect(self.quit)
+        self.menu.addAction(self.open_folder_action)
+        self.menu.addAction(self.settings_action)
         self.menu.addAction(self.exit_action)
         
         # Set the menu
@@ -573,29 +604,23 @@ class SystemTrayApp(QtWidgets.QApplication):
             print(f"Error loading description: {e}")
             traceback.print_exc()
     
-    def get_preview_text(self, text, max_words=30):
-        """Get a preview of the text with a maximum number of words"""
+    def get_preview_text(self, text, max_words=200):
+        """Get a preview of the text with a much larger number of words (or full text)"""
         if not text:
             return "No description available"
-        
         words = text.split()
         if len(words) <= max_words:
             return text
-        
         return " ".join(words[:max_words]) + "..."
     
     def update_description_preview(self):
         """Update the description preview in the menu"""
         if self.wallpaper.current_description:
-            # Get a shorter preview for the menu (e.g., 30-40 words)
-            preview_text = self.get_preview_text(self.wallpaper.current_description, max_words=35)
+            # Show a much longer preview (or full text)
+            preview_text = self.get_preview_text(self.wallpaper.current_description, max_words=200)
             self.description_preview_label.setText(preview_text)
-            # QWidgetAction is not typically enabled/disabled in the same way as QAction
-            # Its interactivity comes from its widget. The label is not interactive.
-            self.view_full_description.setEnabled(True)
         else:
             self.description_preview_label.setText("No description available")
-            self.view_full_description.setEnabled(False)
 
     
     def show_full_description(self):
