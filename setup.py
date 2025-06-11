@@ -6,7 +6,7 @@ from cx_Freeze import setup, Executable
 build_exe_options = {
     "packages": ["os", "sys", "ctypes", "requests", "bs4", "PyQt5", "PIL", "urllib3", "chardet", "datetime", "traceback"],
     "excludes": ["PyQt5.QtQml", "PyQt5.QtQuick", "pytest", "html5lib", "lxml"],
-    "include_files": ["image-face.ico"],
+    "include_files": ["wall-y-round.ico"], # Ensure this is the correct icon file
     "include_msvcr": True,
     "zip_include_packages": ["*"],
     "zip_exclude_packages": [],
@@ -27,7 +27,7 @@ setup(
         Executable(
             "apod_wallpaper.py", 
             base=base,
-            icon="image-face.ico",  # Using .ico file instead of .png
+            icon="wall-y-round.ico",  # Standardized icon
             shortcut_name="wall-y",
             shortcut_dir="DesktopFolder",
             target_name="wall_y.exe"
