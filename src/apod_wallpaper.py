@@ -1,6 +1,4 @@
-import os
-import sys
-import time
+import sys, os
 import datetime
 import requests
 import ctypes
@@ -12,6 +10,48 @@ from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QMessageBox, QDialog, QVBoxLayout, QCheckBox, QPushButton, QTextBrowser, QLabel
 from PIL import Image, ExifTags
 from PIL.PngImagePlugin import PngInfo
+
+def load_settings(env_path=None):
+    settings = {}
+    # Try to find settings.env in the right place depending on frozen/script mode
+    possible_paths = []
+    if env_path:
+        possible_paths.append(env_path)
+    if getattr(sys, 'frozen', False):
+        # If frozen, look next to the executable (build output)
+        exe_dir = os.path.dirname(sys.executable)
+        possible_paths.append(os.path.join(exe_dir, "src", "settings.env"))
+        possible_paths.append(os.path.join(exe_dir, "settings.env"))
+    # Always try script dir (src/)
+    possible_paths.append(os.path.join(os.path.dirname(__file__), "settings.env"))
+
+    env_found = False
+    for path in possible_paths:
+        if os.path.exists(path):
+            env_found = True
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        settings[k.strip()] = v.strip()
+            break
+
+    if not env_found:
+        msg = ("ERROR: Could not find settings.env!\n" +
+               "Searched paths:\n" +
+               "\n".join(possible_paths) +
+               "\nPlease ensure settings.env is present next to the executable or in the src/ folder.")
+        print(msg)
+        sys.exit(1)
+
+    # Convert types
+    settings["DEBUG_MODE"] = settings.get("DEBUG_MODE", "False") == "True"
+    settings["ENABLE_WALLPAPER"] = settings.get("ENABLE_WALLPAPER", "True") == "True"
+    settings["ENABLE_SCREENSAVER"] = settings.get("ENABLE_SCREENSAVER", "False") == "True"
+    return settings
+
+settings = load_settings()
 
 # Single instance check
 def is_already_running():
@@ -50,50 +90,62 @@ def resource_path(relative_path):
 class APODWallpaper:
     # [Rest of the APODWallpaper class remains unchanged]
     def __init__(self):
-        self.base_url = "https://apod.nasa.gov/apod/"
-        self.archive_url = "https://apod.nasa.gov/apod/archivepixFull.html"
-        self.today_url = "https://apod.nasa.gov/apod/astropix.html"
-        self.current_image_url = None
-        self.current_description = None
-        self.current_title = None
-        
-        # Change download directory to wall-y under Pictures
+        # Use settings for URLs
+        self.base_url = settings["APOD_BASE_URL"]
+        self.archive_url = settings["APOD_ARCHIVE_URL"]
+        self.today_url = settings["APOD_TODAY_URL"]
+
+        # Set default download directory to wall-y under Pictures
         pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures")
         self.download_dir = os.path.join(pictures_dir, "wall-y")
-        
         # Create download directory if it doesn't exist
         if not os.path.exists(self.download_dir):
             os.makedirs(self.download_dir)
+
+        # Debug logging
+        if settings["DEBUG_MODE"]:
+            print("Debug mode enabled")
+            print(f"Base URL: {self.base_url}")
+            print(f"Download directory: {self.download_dir}")
+
+        # Screensaver toggle
+        self.enable_screensaver = settings["ENABLE_SCREENSAVER"]
+
+        self.current_image_url = None
+        self.current_description = None
+        self.current_title = None
     
     def get_latest_image_info(self):
         """Scrape the APOD today page to find the latest image URL and description"""
         try:
             response = requests.get(self.today_url, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
-            
+
             # Get the title - it's typically in the center tag
             title = None
             title_elem = soup.find('title')
             if title_elem:
                 title = title_elem.text.strip()
-            
-            # Get the description - it's typically in the paragraph after the image
+
+            # Get the description/explanation
             description = None
             explanation = None
             paragraphs = soup.find_all('p')
-            if len(paragraphs) >= 2:
-                description = paragraphs[1].text.strip()
-                # Look for "Explanation:" text which is common in APOD
-                for p in paragraphs:
-                    text = p.text.strip()
-                    if text.startswith("Explanation:"):
-                        explanation = text
+            for p in paragraphs:
+                # Look for any tag or text containing 'Explanation:'
+                if p.find(string=lambda s: s and 'Explanation:' in s):
+                    # Get all text after 'Explanation:'
+                    full_text = p.get_text(separator=' ', strip=True)
+                    idx = full_text.find('Explanation:')
+                    if idx != -1:
+                        explanation = full_text[idx + len('Explanation:'):].strip()
                         break
-            
-            # If we found an explanation, use it, otherwise use the description
-            if explanation:
+            # Fallback: use the second paragraph as description if no explanation found
+            if not explanation and len(paragraphs) >= 2:
+                description = paragraphs[1].get_text(separator=' ', strip=True)
+            else:
                 description = explanation
-            
+
             # Find image link - typically it's an <a> tag with an <img> inside
             image_url = None
             for img_link in soup.find_all('a'):
@@ -105,7 +157,7 @@ class APODWallpaper:
                         else:
                             image_url = self.base_url + img_href
                         break
-            
+
             if image_url:
                 return {
                     'url': image_url,
@@ -114,7 +166,7 @@ class APODWallpaper:
                     'page_url': self.today_url,
                     'date': datetime.datetime.now().strftime("%Y-%m-%d")
                 }
-            
+
             return None
         except Exception as e:
             print(f"Error getting latest image info: {e}")
@@ -257,17 +309,68 @@ class APODWallpaper:
             print(f"Error reading metadata from image: {e}")
             return None
     
-    def set_wallpaper(self, image_path):
-        """Set the downloaded image as wallpaper"""
+    def set_wallpaper(self, image_url):
+        """Download the image if needed and set as wallpaper using the local file path."""
+        import ctypes
+        import requests
+        import os
+        if image_url.startswith("http"):
+            local_path = os.path.join(self.download_dir, os.path.basename(image_url))
+            try:
+                response = requests.get(image_url, stream=True)
+                if response.status_code == 200:
+                    with open(local_path, 'wb') as f:
+                        for chunk in response.iter_content(1024):
+                            f.write(chunk)
+                    print(f"Downloaded wallpaper to: {local_path}")
+                else:
+                    print(f"Failed to download image: {response.status_code}")
+                    return False
+            except Exception as e:
+                print(f"Error downloading wallpaper: {e}")
+                return False
+        else:
+            local_path = image_url
         try:
-            # Windows specific code to set wallpaper
-            ctypes.windll.user32.SystemParametersInfoW(20, 0, image_path, 3)
+            ctypes.windll.user32.SystemParametersInfoW(20, 0, local_path, 3)
+            print(f"Wallpaper set successfully: {local_path}")
             return True
         except Exception as e:
             print(f"Error setting wallpaper: {e}")
-            traceback.print_exc()
             return False
     
+    def set_screensaver_wallpaper(self, image_url):
+        """Download the image if needed and prompt user to set as lock screen wallpaper manually."""
+        import os
+        import requests
+        import subprocess
+        from PyQt5.QtWidgets import QMessageBox
+        if image_url.startswith("http"):
+            local_path = os.path.join(self.download_dir, "lockscreen_wallpaper.jpg")
+            try:
+                response = requests.get(image_url, stream=True)
+                if response.status_code == 200:
+                    with open(local_path, 'wb') as f:
+                        for chunk in response.iter_content(1024):
+                            f.write(chunk)
+                    print(f"Downloaded lock screen wallpaper to: {local_path}")
+                else:
+                    print(f"Failed to download image: {response.status_code}")
+                    return False
+            except Exception as e:
+                print(f"Error downloading lock screen wallpaper: {e}")
+                return False
+        else:
+            local_path = image_url
+        # Open Windows lock screen settings
+        try:
+            subprocess.run(["start", "ms-settings:lockscreen"], shell=True)
+            QMessageBox.information(None, "Lock Screen Wallpaper", f"Lock screen wallpaper downloaded to:\n{local_path}\n\nPlease set it manually in Windows Settings.")
+            return True
+        except Exception as e:
+            print(f"Error opening lock screen settings: {e}")
+            return False
+
     def get_current_wallpaper(self):
         """Get the path of the current wallpaper"""
         try:
@@ -283,22 +386,22 @@ class APODWallpaper:
     def update_wallpaper(self):
         """Main function to update the wallpaper"""
         try:
+            # Ensure current_image_url is set when fetching the latest image
             image_info = self.get_latest_image_info()
-            if not image_info or 'url' not in image_info:
-                return False, None
-            
-            # Store the image info
-            self.current_image_url = image_info['url']
-            self.current_description = image_info.get('description', 'No description available')
-            self.current_title = image_info.get('title', 'NASA APOD')
-            
-            # Download and set the image
-            image_path = self.download_image(image_info['url'], image_info)
-            if image_path:
-                success = self.set_wallpaper(image_path)
-                return success, image_path
-            
-            return False, None
+            if image_info and 'url' in image_info:
+                self.current_image_url = image_info['url']
+                print(f"Current image URL set: {self.current_image_url}")
+            else:
+                print("Failed to fetch the latest image info")
+
+            # Apply wallpaper
+            if settings["ENABLE_WALLPAPER"]:
+                print("Applying wallpaper...")
+                self.set_wallpaper(self.current_image_url)
+            else:
+                print("Wallpaper functionality disabled")
+                
+            return True, self.current_image_url
         except Exception as e:
             print(f"Error updating wallpaper: {e}")
             traceback.print_exc()
@@ -366,7 +469,7 @@ class DescriptionDialog(QDialog):
         layout.addWidget(self.text_browser, stretch=1)
 
         # Copyright label (bottom, smaller font)
-        copyright_label = QLabel("Copyright © Tragooolchitr Jittasaiyapan")
+        copyright_label = QLabel("Copyright © wall-y")
         copyright_label.setAlignment(QtCore.Qt.AlignRight)
         copyright_label.setStyleSheet("font-size: 9pt; color: #888; margin-top: 8px;")
         layout.addWidget(copyright_label)
@@ -396,6 +499,16 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox.setChecked(self.is_autostart_enabled())
         layout.addWidget(self.autostart_checkbox)
         
+        # Screensaver toggle option
+        self.screensaver_checkbox = QCheckBox("Enable Screensaver")
+        self.screensaver_checkbox.setChecked(settings["ENABLE_SCREENSAVER"])
+        layout.addWidget(self.screensaver_checkbox)
+
+        # Wallpaper toggle option
+        self.wallpaper_checkbox = QCheckBox("Enable Wallpaper")
+        self.wallpaper_checkbox.setChecked(settings["ENABLE_WALLPAPER"])
+        layout.addWidget(self.wallpaper_checkbox)
+
         # Save button
         save_button = QPushButton("Save")
         save_button.clicked.connect(self.save_settings)
@@ -420,6 +533,11 @@ class SettingsDialog(QDialog):
             self.add_to_startup()
         else:
             self.remove_from_startup()
+
+        # Update settings based on checkboxes
+        settings["ENABLE_WALLPAPER"] = self.wallpaper_checkbox.isChecked()
+        settings["ENABLE_SCREENSAVER"] = self.screensaver_checkbox.isChecked()
+
         self.accept()
     
     def add_to_startup(self):
@@ -557,12 +675,25 @@ class SystemTrayApp(QtWidgets.QApplication):
 
     
     def initial_check(self):
-        """Check if we need to update on startup - always check for new image"""
-        if self.wallpaper.is_new_image_available():
-            self.check_for_update(show_notification=True)
-        else:
-            # Load the current description if available
-            self.load_current_description()
+        """Check for new images and update description on startup"""
+        # Always fetch latest description first
+        try:
+            image_info = self.wallpaper.get_latest_image_info()
+            if image_info:
+                self.wallpaper.current_description = image_info.get('description', '')
+                self.wallpaper.current_title = image_info.get('title', 'NASA APOD')
+                self.update_description_preview()
+
+                # Check if we need to update the wallpaper
+                if self.wallpaper.is_new_image_available():
+                    self.check_for_update(show_notification=True)
+            else:
+                # Fallback: try loading from local files
+                self.load_current_description()
+        except Exception as e:
+            print(f"Error in initial check: {e}")
+            traceback.print_exc()
+            self.load_current_description()  # Fallback to local files
     
     def load_current_description(self):
         """Load the current description from the current wallpaper or file"""
