@@ -2,7 +2,9 @@ import sys
 import os
 from cx_Freeze import setup, Executable
 
-# Define the source directory relative to setup.py
+
+
+# Define the source and assets directories
 SRC_DIR = "src"
 ASSETS_DIR = "assets"
 MAIN_SCRIPT = os.path.join(SRC_DIR, "apod_wallpaper.py")
@@ -10,9 +12,17 @@ ICON_FILE = os.path.join(ASSETS_DIR, "wall-y-round.ico")
 
 # Dependencies are automatically detected, but it might need fine tuning.
 build_exe_options = {
-    "packages": ["os", "sys", "ctypes", "requests", "bs4", "PyQt5", "PIL", "urllib3", "chardet", "datetime", "traceback"],
-    "excludes": ["PyQt5.QtQml", "PyQt5.QtQuick", "pytest", "html5lib", "lxml", "tkinter"], # Added tkinter to excludes
-    "include_files": [ICON_FILE],
+    "packages": [
+        "os", "sys", "ctypes", "requests", "bs4", "PyQt5", "PIL", "urllib3", "chardet", "datetime", "traceback"
+    ],
+    "excludes": [
+        "PyQt5.QtQml", "PyQt5.QtQuick", "pytest", "html5lib", "lxml", "tkinter"
+    ],
+    # Copy settings.py to the src folder in the build output
+    "include_files": [
+        (os.path.join(SRC_DIR, "settings.env"), os.path.join("src", "settings.env")),
+        ICON_FILE
+    ],
     "include_msvcr": True,
     "build_exe": "build/dist", # Output to build/dist/
     "zip_include_packages": ["*"],

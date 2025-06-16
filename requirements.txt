@@ -6,3 +6,4 @@ pywin32
 cx_Freeze
 chardet
 urllib3
+python-dotenv
