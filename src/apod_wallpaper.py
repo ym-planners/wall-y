@@ -865,5 +865,21 @@ if __name__ == "__main__":
                            "Please check your system tray for the running application.")
         sys.exit(1)
     else:
-        app = SystemTrayApp(sys.argv)
-        sys.exit(app.exec_())
+        app = QtWidgets.QApplication(sys.argv)
+        # --- Splash Screen ---
+        splash_pix = QtGui.QPixmap(resource_path("assets/wall-y-round.ico"))
+        if splash_pix.isNull():
+            # fallback: blue square
+            splash_pix = QtGui.QPixmap(128, 128)
+            splash_pix.fill(QtGui.QColor("blue"))
+        splash = QtWidgets.QSplashScreen(splash_pix)
+        splash.showMessage("Starting wall-y...", QtCore.Qt.AlignBottom | QtCore.Qt.AlignCenter, QtCore.Qt.white)
+        splash.show()
+        app.processEvents()
+        # Simulate loading (or do real init)
+        import time
+        time.sleep(1)  # Optional: show splash for at least 1s
+        # --- End Splash Screen ---
+        tray_app = SystemTrayApp(sys.argv)
+        splash.close()
+        sys.exit(tray_app.exec_())
